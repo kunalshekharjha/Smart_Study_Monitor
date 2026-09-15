@@ -15,6 +15,11 @@ current_playing = None
 
 # Initialize Camera, Face Mesh, and YOLO Model
 cap = cv2.VideoCapture(0)
+if not cap.isOpened():
+    raise SystemExit(
+        "Could not open the webcam (device 0). "
+        "Close any other app using the camera (Camera, Zoom, Teams) and try again."
+    )
 face_detector = FaceMeshDetector(maxFaces=1)
 phone_detector = YOLO("yolov8n.pt")  # COCO pre-trained lightweight model
 
@@ -34,9 +39,17 @@ SLEEP_THRESHOLD_FRAMES = 15
 covered_frames = 0
 COVER_THRESHOLD_FRAMES = 20  # ~0.6 seconds of missing face triggers warning
 
+# YOLO inference is the CPU bottleneck, so look for a phone every Nth frame
+# only and carry the last verdict in between. Sleep detection stays full rate.
+frame_count = 0
+PHONE_DETECT_EVERY = 3
+phone_detected = False
+phone_boxes = []  # last known (x1, y1, x2, y2, conf) for each phone
+
 while True:
     success, img = cap.read()
     if not success:
+        print("Lost the camera feed - stopping.")
         break
 
     # Check if ANY sound is currently playing to completion
@@ -59,18 +72,21 @@ while True:
         eye_dist, _ = face_detector.findDistance(face[LEFT_EYE_TOP], face[LEFT_EYE_BOTTOM])
         face_dist, _ = face_detector.findDistance(face[FACE_LEFT], face[FACE_RIGHT])
 
-        # Eye Aspect Ratio calculation
-        ratio = (eye_dist / face_dist) * 100
+        # Eye Aspect Ratio calculation. The mesh occasionally collapses and puts
+        # both face-width landmarks on the same point - skip those frames rather
+        # than dividing by zero.
+        if face_dist > 0:
+            ratio = (eye_dist / face_dist) * 100
 
-        if ratio < 11.0:
-            closed_frames += 1
-        else:
-            closed_frames = 0
+            if ratio < 11.0:
+                closed_frames += 1
+            else:
+                closed_frames = 0
 
-        if closed_frames >= SLEEP_THRESHOLD_FRAMES:
-            is_sleepy = True
+            if closed_frames >= SLEEP_THRESHOLD_FRAMES:
+                is_sleepy = True
 
-        cvzone.putTextRect(img, f"Eye Ratio: {int(ratio)}", (30, 40), scale=1, thickness=1)
+            cvzone.putTextRect(img, f"Eye Ratio: {int(ratio)}", (30, 40), scale=1, thickness=1)
 
     else:
         # Face missing/covered -> Increment covered frames counter
@@ -81,22 +97,29 @@ while True:
             is_face_covered = True
 
     # ------------------- 2. PHONE DETECTION -------------------
-    results = phone_detector.predict(img, stream=True, verbose=False)
-    phone_detected = False
+    if frame_count % PHONE_DETECT_EVERY == 0:
+        results = phone_detector.predict(img, stream=True, verbose=False)
+        phone_detected = False
+        phone_boxes = []
 
-    for r in results:
-        boxes = r.boxes
-        for box in boxes:
-            cls_id = int(box.cls[0])
-            conf = float(box.conf[0])
+        for r in results:
+            boxes = r.boxes
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
 
-            if classNames[cls_id] == "cell phone" and conf > 0.5:
-                phone_detected = True
-                
-                # Bounding box visual
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 255), 2)
-                cvzone.putTextRect(img, f"Phone detected! {int(conf*100)}%", (x1, max(y1 - 10, 30)), scale=1, thickness=1, colorR=(255, 0, 255))
+                if classNames[cls_id] == "cell phone" and conf > 0.5:
+                    phone_detected = True
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    phone_boxes.append((x1, y1, x2, y2, conf))
+
+    frame_count += 1
+
+    # Bounding box visual - redrawn every frame, fresh detection or carried over
+    for x1, y1, x2, y2, conf in phone_boxes:
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 255), 2)
+        cvzone.putTextRect(img, f"Phone detected! {int(conf*100)}%", (x1, max(y1 - 10, 30)), scale=1, thickness=1, colorR=(255, 0, 255))
+
 
     # ------------------- 3. ALARM LOGIC & DISPLAY -------------------
     
