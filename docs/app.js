@@ -33,7 +33,6 @@ const el = {
   canvas: document.getElementById("canvas"),
   overlay: document.getElementById("overlay"),
   status: document.getElementById("status"),
-  hint: document.getElementById("hint"),
   startBtn: document.getElementById("startBtn"),
   stopBtn: document.getElementById("stopBtn"),
   controls: document.getElementById("controls"),
@@ -166,8 +165,7 @@ function stop() {
   el.controls.hidden = true;
   el.overlay.hidden = false;
   el.startBtn.disabled = false;
-  setStatus("Stopped.");
-  el.hint.textContent = "Press Start whenever you are ready to go again.";
+  setStatus("");
 }
 
 // Browsers block audio that was not started by a user gesture. Priming each
@@ -348,10 +346,9 @@ el.stopBtn.addEventListener("click", stop);
 
 loadModels()
   .then(() => {
-    setStatus("Ready. Your camera turns on only when you press Start.");
+    setStatus("");
     el.startBtn.disabled = false;
   })
   .catch((err) => {
     setStatus("Could not load the models: " + err.message, true);
-    el.hint.textContent = "A reload usually fixes this if the connection dropped.";
   });
